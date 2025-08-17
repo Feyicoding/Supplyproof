@@ -1,17 +1,15 @@
-
 ;; SupplyProof Contract
 ;; Supply chain tracking contract that records each product checkpoint, 
 ;; ensuring authenticity and traceability.
 
-;; constants
-(define-constant CONTRACT-OWNER tx-sender)
+;; Error constants
 (define-constant ERR-NOT-AUTHORIZED (err u101))
 (define-constant ERR-PRODUCT-NOT-FOUND (err u102))
 (define-constant ERR-PRODUCT-EXISTS (err u103))
 (define-constant ERR-INVALID-OWNER (err u104))
 (define-constant ERR-INVALID-STATUS (err u105))
 
-;; data maps and vars
+;; Data maps and vars
 ;; Map to store product information
 (define-map products
   { product-id: (string-ascii 36) }
@@ -49,7 +47,7 @@
 ;; Variable to track total number of products registered
 (define-data-var total-products uint u0)
 
-;; private functions
+;; Private functions
 ;; Helper function to generate the next checkpoint index for a product
 (define-private (get-next-checkpoint-index (product-id (string-ascii 36)))
   (let ((current-count (default-to { count: u0 } (map-get? checkpoint-counters { product-id: product-id }))))
@@ -67,7 +65,7 @@
   )
 )
 
-;; public functions
+;; Public functions
 ;; Function to register a new product in the supply chain
 (define-public (register-product
   (product-id (string-ascii 36))
@@ -117,10 +115,10 @@
   )
 )
 
-;; Function to update product status (by current owner only)
-(define-public (update-product-status
+;; Function to transfer product ownership
+(define-public (transfer-ownership
   (product-id (string-ascii 36))
-  (new-status (string-ascii 50))
+  (new-owner principal)
   (new-location (string-ascii 100))
   (notes (string-ascii 500))
 )
@@ -129,23 +127,24 @@
       existing-product
       (if (is-eq tx-sender (get current-owner existing-product))
         (let ((checkpoint-index (get-next-checkpoint-index product-id)))
-          ;; Update product information
+          ;; Update product ownership and location
           (map-set products
             { product-id: product-id }
             (merge existing-product {
-              status: new-status,
+              current-owner: new-owner,
               location: new-location,
-              timestamp: block-height
+              timestamp: block-height,
+              status: "transferred"
             })
           )
-          ;; Record checkpoint
+          ;; Record ownership transfer checkpoint
           (map-set product-checkpoints
             { product-id: product-id, checkpoint-index: checkpoint-index }
             {
               handler: tx-sender,
               previous-owner: (get current-owner existing-product),
-              new-owner: (get current-owner existing-product),
-              status: new-status,
+              new-owner: new-owner,
+              status: "transferred",
               location: new-location,
               timestamp: block-height,
               notes: notes
@@ -160,4 +159,38 @@
       ERR-PRODUCT-NOT-FOUND
     )
   )
+)
+
+;; Read-only functions
+;; Function to get product details
+(define-read-only (get-product (product-id (string-ascii 36)))
+  (map-get? products { product-id: product-id })
+)
+
+;; Function to get a specific checkpoint
+(define-read-only (get-checkpoint 
+  (product-id (string-ascii 36))
+  (checkpoint-index uint)
+)
+  (map-get? product-checkpoints 
+    { product-id: product-id, checkpoint-index: checkpoint-index }
+  )
+)
+
+;; Function to get the total number of checkpoints for a product
+(define-read-only (get-checkpoint-count (product-id (string-ascii 36)))
+  (default-to { count: u0 } (map-get? checkpoint-counters { product-id: product-id }))
+)
+
+;; Function to get current owner of a product
+(define-read-only (get-product-owner (product-id (string-ascii 36)))
+  (match (map-get? products { product-id: product-id })
+    product-data (some (get current-owner product-data))
+    none
+  )
+)
+
+;; Function to get total number of products registered
+(define-read-only (get-total-products)
+  (var-get total-products)
 )

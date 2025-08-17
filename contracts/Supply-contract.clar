@@ -1,4 +1,3 @@
-
 ;; SupplyProof Contract
 ;; Supply chain tracking contract that records each product checkpoint, 
 ;; ensuring authenticity and traceability.
@@ -293,6 +292,130 @@
         ERR-NOT-AUTHORIZED
       )
       ERR-PRODUCT-NOT-FOUND
+    )
+  )
+)
+
+;; ============================================
+;; READ-ONLY FUNCTIONS
+;; ============================================
+
+;; Function to get product details
+(define-read-only (get-product (product-id (string-ascii 36)))
+  (map-get? products { product-id: product-id })
+)
+
+;; Function to get a specific checkpoint
+(define-read-only (get-checkpoint 
+  (product-id (string-ascii 36))
+  (checkpoint-index uint)
+)
+  (map-get? product-checkpoints 
+    { product-id: product-id, checkpoint-index: checkpoint-index }
+  )
+)
+
+;; Function to get the total number of checkpoints for a product
+(define-read-only (get-checkpoint-count (product-id (string-ascii 36)))
+  (default-to { count: u0 } (map-get? checkpoint-counters { product-id: product-id }))
+)
+
+;; Function to get current owner of a product
+(define-read-only (get-product-owner (product-id (string-ascii 36)))
+  (match (map-get? products { product-id: product-id })
+    product-data (some (get current-owner product-data))
+    none
+  )
+)
+
+;; Function to get product manufacturer
+(define-read-only (get-product-manufacturer (product-id (string-ascii 36)))
+  (match (map-get? products { product-id: product-id })
+    product-data (some (get manufacturer product-data))
+    none
+  )
+)
+
+;; Function to check if product is active
+(define-read-only (is-product-active (product-id (string-ascii 36)))
+  (match (map-get? products { product-id: product-id })
+    product-data (get is-active product-data)
+    false
+  )
+)
+
+;; Function to get product status
+(define-read-only (get-product-status (product-id (string-ascii 36)))
+  (match (map-get? products { product-id: product-id })
+    product-data (some (get status product-data))
+    none
+  )
+)
+
+;; Function to get product location
+(define-read-only (get-product-location (product-id (string-ascii 36)))
+  (match (map-get? products { product-id: product-id })
+    product-data (some (get location product-data))
+    none
+  )
+)
+
+;; Function to get total number of products registered
+(define-read-only (get-total-products)
+  (var-get total-products)
+)
+
+;; Function to check if caller is authorized to modify product
+(define-read-only (is-authorized (product-id (string-ascii 36)) (caller principal))
+  (match (map-get? products { product-id: product-id })
+    product-data 
+    (or (is-eq caller (get current-owner product-data))
+        (is-eq caller (get manufacturer product-data)))
+    false
+  )
+)
+
+;; Function to verify product authenticity (checks if product exists and is registered)
+(define-read-only (verify-product-authenticity (product-id (string-ascii 36)))
+  (match (map-get? products { product-id: product-id })
+    product-data 
+    {
+      exists: true,
+      is-active: (get is-active product-data),
+      manufacturer: (get manufacturer product-data),
+      current-owner: (get current-owner product-data),
+      status: (get status product-data),
+      last-update: (get timestamp product-data)
+    }
+    {
+      exists: false,
+      is-active: false,
+      manufacturer: 'SP000000000000000000002Q6VF78,
+      current-owner: 'SP000000000000000000002Q6VF78,
+      status: "not-found",
+      last-update: u0
+    }
+  )
+)
+
+;; Function to get product history summary
+(define-read-only (get-product-summary (product-id (string-ascii 36)))
+  (let 
+    (
+      (checkpoint-count (get count (get-checkpoint-count product-id)))
+    )
+    (match (map-get? products { product-id: product-id })
+      product-data
+      {
+        exists: true,
+        total-checkpoints: checkpoint-count,
+        authenticity-verified: true
+      }
+      {
+        exists: false,
+        total-checkpoints: u0,
+        authenticity-verified: false
+      }
     )
   )
 )

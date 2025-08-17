@@ -4,7 +4,7 @@ authors = []
 description = ""
 telemetry = true
 requirements = []
-[contracts.Supply-contract]
+[contracts.supply-contract]
 path = "contracts/Supply-contract.clar"
 depends_on = []
 

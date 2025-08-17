@@ -161,3 +161,138 @@
     )
   )
 )
+
+;; Function to transfer product ownership
+(define-public (transfer-ownership
+  (product-id (string-ascii 36))
+  (new-owner principal)
+  (new-location (string-ascii 100))
+  (notes (string-ascii 500))
+)
+  (let ((product (map-get? products { product-id: product-id })))
+    (match product
+      existing-product
+      (if (is-eq tx-sender (get current-owner existing-product))
+        (let ((checkpoint-index (get-next-checkpoint-index product-id)))
+          ;; Update product ownership and location
+          (map-set products
+            { product-id: product-id }
+            (merge existing-product {
+              current-owner: new-owner,
+              location: new-location,
+              timestamp: block-height,
+              status: "transferred"
+            })
+          )
+          ;; Record ownership transfer checkpoint
+          (map-set product-checkpoints
+            { product-id: product-id, checkpoint-index: checkpoint-index }
+            {
+              handler: tx-sender,
+              previous-owner: (get current-owner existing-product),
+              new-owner: new-owner,
+              status: "transferred",
+              location: new-location,
+              timestamp: block-height,
+              notes: notes
+            }
+          )
+          ;; Increment checkpoint counter
+          (increment-checkpoint-counter product-id)
+          (ok true)
+        )
+        ERR-NOT-AUTHORIZED
+      )
+      ERR-PRODUCT-NOT-FOUND
+    )
+  )
+)
+
+;; Function to record a checkpoint without ownership change
+(define-public (record-checkpoint
+  (product-id (string-ascii 36))
+  (status (string-ascii 50))
+  (location (string-ascii 100))
+  (notes (string-ascii 500))
+)
+  (let ((product (map-get? products { product-id: product-id })))
+    (match product
+      existing-product
+      (if (is-eq tx-sender (get current-owner existing-product))
+        (let ((checkpoint-index (get-next-checkpoint-index product-id)))
+          ;; Update product status and location
+          (map-set products
+            { product-id: product-id }
+            (merge existing-product {
+              status: status,
+              location: location,
+              timestamp: block-height
+            })
+          )
+          ;; Record checkpoint
+          (map-set product-checkpoints
+            { product-id: product-id, checkpoint-index: checkpoint-index }
+            {
+              handler: tx-sender,
+              previous-owner: (get current-owner existing-product),
+              new-owner: (get current-owner existing-product),
+              status: status,
+              location: location,
+              timestamp: block-height,
+              notes: notes
+            }
+          )
+          ;; Increment checkpoint counter
+          (increment-checkpoint-counter product-id)
+          (ok true)
+        )
+        ERR-NOT-AUTHORIZED
+      )
+      ERR-PRODUCT-NOT-FOUND
+    )
+  )
+)
+
+;; Function to deactivate a product (emergency function)
+(define-public (deactivate-product
+  (product-id (string-ascii 36))
+  (reason (string-ascii 500))
+)
+  (let ((product (map-get? products { product-id: product-id })))
+    (match product
+      existing-product
+      (if (or (is-eq tx-sender (get manufacturer existing-product))
+              (is-eq tx-sender (get current-owner existing-product)))
+        (let ((checkpoint-index (get-next-checkpoint-index product-id)))
+          ;; Deactivate product
+          (map-set products
+            { product-id: product-id }
+            (merge existing-product {
+              is-active: false,
+              status: "deactivated",
+              timestamp: block-height
+            })
+          )
+          ;; Record deactivation checkpoint
+          (map-set product-checkpoints
+            { product-id: product-id, checkpoint-index: checkpoint-index }
+            {
+              handler: tx-sender,
+              previous-owner: (get current-owner existing-product),
+              new-owner: (get current-owner existing-product),
+              status: "deactivated",
+              location: (get location existing-product),
+              timestamp: block-height,
+              notes: reason
+            }
+          )
+          ;; Increment checkpoint counter
+          (increment-checkpoint-counter product-id)
+          (ok true)
+        )
+        ERR-NOT-AUTHORIZED
+      )
+      ERR-PRODUCT-NOT-FOUND
+    )
+  )
+)

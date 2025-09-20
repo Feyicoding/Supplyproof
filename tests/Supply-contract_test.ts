@@ -748,3 +748,336 @@ Clarinet.test({
         assertEquals(nonExistentCountBlock.receipts[0].result, "{count: u0}");
     },
 });
+
+// ============================================================================
+// COMMIT 4: Advanced Integration Tests and Complex Scenarios
+// ============================================================================
+
+Clarinet.test({
+    name: "Test complex supply chain scenario with multiple products and transfers",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const deployer = accounts.get("deployer")!;
+        const manufacturer = accounts.get("wallet_1")!;
+        const distributor = accounts.get("wallet_2")!;
+        const retailer = accounts.get("wallet_3")!;
+        
+        const products = ["COMPLEX-001", "COMPLEX-002", "COMPLEX-003"];
+
+        // Register multiple products from different manufacturers
+        chain.mineBlock([
+            Tx.contractCall("supply-contract", "register-product", 
+                [types.ascii(products[0]), types.ascii("Product A"), types.ascii("Factory A")], 
+                deployer.address),
+            Tx.contractCall("supply-contract", "register-product", 
+                [types.ascii(products[1]), types.ascii("Product B"), types.ascii("Factory B")], 
+                manufacturer.address),
+            Tx.contractCall("supply-contract", "register-product", 
+                [types.ascii(products[2]), types.ascii("Product C"), types.ascii("Factory C")], 
+                deployer.address)
+        ]);
+
+        // Execute complex transfer chains
+        chain.mineBlock([
+            // Product A: deployer -> distributor
+            Tx.contractCall("supply-contract", "transfer-ownership", 
+                [types.ascii(products[0]), types.principal(distributor.address), 
+                 types.ascii("Distributor Hub"), types.ascii("To distributor")], 
+                deployer.address),
+            // Product B: manufacturer -> retailer (direct)
+            Tx.contractCall("supply-contract", "transfer-ownership", 
+                [types.ascii(products[1]), types.principal(retailer.address), 
+                 types.ascii("Retail Store"), types.ascii("Direct to retailer")], 
+                manufacturer.address)
+        ]);
+
+        // Second round of transfers
+        chain.mineBlock([
+            // Product A: distributor -> retailer
+            Tx.contractCall("supply-contract", "transfer-ownership", 
+                [types.ascii(products[0]), types.principal(retailer.address), 
+                 types.ascii("Final Store"), types.ascii("Final destination")], 
+                distributor.address),
+            // Product C: deployer -> manufacturer
+            Tx.contractCall("supply-contract", "transfer-ownership", 
+                [types.ascii(products[2]), types.principal(manufacturer.address), 
+                 types.ascii("Processing Center"), types.ascii("For processing")], 
+                deployer.address)
+        ]);
+
+        // Verify final states and checkpoint counts
+        let productAOwner = chain.mineBlock([
+            Tx.contractCall("supply-contract", "get-product-owner", 
+                [types.ascii(products[0])], deployer.address)
+        ]);
+        assertEquals(productAOwner.receipts[0].result, `(some ${retailer.address})`);
+
+        let productACheckpoints = chain.mineBlock([
+            Tx.contractCall("supply-contract", "get-checkpoint-count", 
+                [types.ascii(products[0])], deployer.address)
+        ]);
+        assertEquals(productACheckpoints.receipts[0].result, "{count: u3}"); // registration + 2 transfers
+
+        let productBCheckpoints = chain.mineBlock([
+            Tx.contractCall("supply-contract", "get-checkpoint-count", 
+                [types.ascii(products[1])], deployer.address)
+        ]);
+        assertEquals(productBCheckpoints.receipts[0].result, "{count: u2}"); // registration + 1 transfer
+    },
+});
+
+Clarinet.test({
+    name: "Test edge case: Maximum length strings and data validation",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const deployer = accounts.get("deployer")!;
+        const wallet1 = accounts.get("wallet_1")!;
+        
+        // Test with maximum length strings
+        const maxProductId = "ABCD-1234-EFGH-5678-IJKL-9012-MNOP-Q"; // 36 chars exactly
+        const maxProductName = "A".repeat(100); // 100 chars max
+        const maxLocation = "B".repeat(100); // 100 chars max
+        const maxNotes = "C".repeat(500); // 500 chars max
+
+        // Register with maximum length data
+        let registerBlock = chain.mineBlock([
+            Tx.contractCall(
+                "supply-contract",
+                "register-product",
+                [
+                    types.ascii(maxProductId),
+                    types.ascii(maxProductName),
+                    types.ascii(maxLocation)
+                ],
+                deployer.address
+            )
+        ]);
+        assertEquals(registerBlock.receipts[0].result, "(ok true)");
+
+        // Transfer with maximum length notes
+        let transferBlock = chain.mineBlock([
+            Tx.contractCall(
+                "supply-contract",
+                "transfer-ownership",
+                [
+                    types.ascii(maxProductId),
+                    types.principal(wallet1.address),
+                    types.ascii(maxLocation),
+                    types.ascii(maxNotes)
+                ],
+                deployer.address
+            )
+        ]);
+        assertEquals(transferBlock.receipts[0].result, "(ok true)");
+
+        // Verify data integrity with max length strings
+        let productBlock = chain.mineBlock([
+            Tx.contractCall(
+                "supply-contract",
+                "get-product",
+                [types.ascii(maxProductId)],
+                deployer.address
+            )
+        ]);
+        const result = productBlock.receipts[0].result;
+        assertEquals(result.includes(wallet1.address), true);
+        assertEquals(result.includes('"transferred"'), true);
+    },
+});
+
+Clarinet.test({
+    name: "Test concurrent operations and state consistency",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const deployer = accounts.get("deployer")!;
+        const wallet1 = accounts.get("wallet_1")!;
+        const wallet2 = accounts.get("wallet_2")!;
+        const wallet3 = accounts.get("wallet_3")!;
+
+        const products = ["CONCURRENT-001", "CONCURRENT-002", "CONCURRENT-003"];
+
+        // Register multiple products concurrently in same block
+        let registerBlock = chain.mineBlock([
+            Tx.contractCall("supply-contract", "register-product", 
+                [types.ascii(products[0]), types.ascii("Concurrent A"), types.ascii("Location A")], 
+                deployer.address),
+            Tx.contractCall("supply-contract", "register-product", 
+                [types.ascii(products[1]), types.ascii("Concurrent B"), types.ascii("Location B")], 
+                wallet1.address),
+            Tx.contractCall("supply-contract", "register-product", 
+                [types.ascii(products[2]), types.ascii("Concurrent C"), types.ascii("Location C")], 
+                wallet2.address)
+        ]);
+        
+        // All registrations should succeed
+        assertEquals(registerBlock.receipts.length, 3);
+        assertEquals(registerBlock.receipts[0].result, "(ok true)");
+        assertEquals(registerBlock.receipts[1].result, "(ok true)");
+        assertEquals(registerBlock.receipts[2].result, "(ok true)");
+
+        // Multiple transfers in same block
+        let transferBlock = chain.mineBlock([
+            Tx.contractCall("supply-contract", "transfer-ownership", 
+                [types.ascii(products[0]), types.principal(wallet1.address), 
+                 types.ascii("New Location A"), types.ascii("Transfer A")], 
+                deployer.address),
+            Tx.contractCall("supply-contract", "transfer-ownership", 
+                [types.ascii(products[1]), types.principal(wallet2.address), 
+                 types.ascii("New Location B"), types.ascii("Transfer B")], 
+                wallet1.address),
+            Tx.contractCall("supply-contract", "transfer-ownership", 
+                [types.ascii(products[2]), types.principal(wallet3.address), 
+                 types.ascii("New Location C"), types.ascii("Transfer C")], 
+                wallet2.address)
+        ]);
+
+        // All transfers should succeed
+        assertEquals(transferBlock.receipts.length, 3);
+        assertEquals(transferBlock.receipts[0].result, "(ok true)");
+        assertEquals(transferBlock.receipts[1].result, "(ok true)");
+        assertEquals(transferBlock.receipts[2].result, "(ok true)");
+
+        // Verify state consistency after concurrent operations
+        let ownerCheckBlock = chain.mineBlock([
+            Tx.contractCall("supply-contract", "get-product-owner", 
+                [types.ascii(products[0])], deployer.address),
+            Tx.contractCall("supply-contract", "get-product-owner", 
+                [types.ascii(products[1])], deployer.address),
+            Tx.contractCall("supply-contract", "get-product-owner", 
+                [types.ascii(products[2])], deployer.address)
+        ]);
+
+        assertEquals(ownerCheckBlock.receipts[0].result, `(some ${wallet1.address})`);
+        assertEquals(ownerCheckBlock.receipts[1].result, `(some ${wallet2.address})`);
+        assertEquals(ownerCheckBlock.receipts[2].result, `(some ${wallet3.address})`);
+    },
+});
+
+Clarinet.test({
+    name: "Test comprehensive error handling and boundary conditions",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const deployer = accounts.get("deployer")!;
+        const wallet1 = accounts.get("wallet_1")!;
+
+        // Test error conditions in batch
+        let errorTestBlock = chain.mineBlock([
+            // Try to transfer non-existent product
+            Tx.contractCall("supply-contract", "transfer-ownership", 
+                [types.ascii("NON-EXISTENT-PRODUCT"), types.principal(wallet1.address), 
+                 types.ascii("Some Location"), types.ascii("Invalid transfer")], 
+                deployer.address),
+            // Register a product for further testing
+            Tx.contractCall("supply-contract", "register-product", 
+                [types.ascii("ERROR-TEST-001"), types.ascii("Error Test Product"), 
+                 types.ascii("Test Location")], deployer.address),
+            // Try to register duplicate product (should fail)
+            Tx.contractCall("supply-contract", "register-product", 
+                [types.ascii("ERROR-TEST-001"), types.ascii("Duplicate Product"), 
+                 types.ascii("Duplicate Location")], deployer.address)
+        ]);
+
+        // Verify error responses
+        assertEquals(errorTestBlock.receipts[0].result, "(err u102)"); // ERR-PRODUCT-NOT-FOUND
+        assertEquals(errorTestBlock.receipts[1].result, "(ok true)");   // Successful registration
+        assertEquals(errorTestBlock.receipts[2].result, "(err u103)"); // ERR-PRODUCT-EXISTS
+
+        // Test unauthorized transfer after valid registration
+        let unauthorizedBlock = chain.mineBlock([
+            Tx.contractCall("supply-contract", "transfer-ownership", 
+                [types.ascii("ERROR-TEST-001"), types.principal(wallet1.address), 
+                 types.ascii("Unauthorized Location"), types.ascii("Unauthorized attempt")], 
+                wallet1.address) // wallet1 is not the owner
+        ]);
+        assertEquals(unauthorizedBlock.receipts[0].result, "(err u101)"); // ERR-NOT-AUTHORIZED
+
+        // Verify product data remains unchanged after failed operations
+        let verifyBlock = chain.mineBlock([
+            Tx.contractCall("supply-contract", "get-product", 
+                [types.ascii("ERROR-TEST-001")], deployer.address)
+        ]);
+        const productResult = verifyBlock.receipts[0].result;
+        assertEquals(productResult.includes(deployer.address), true);
+        assertEquals(productResult.includes('"registered"'), true);
+    },
+});
+
+Clarinet.test({
+    name: "Test complete supply chain audit trail functionality",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const deployer = accounts.get("deployer")!;
+        const processor = accounts.get("wallet_1")!;
+        const distributor = accounts.get("wallet_2")!;
+        const retailer = accounts.get("wallet_3")!;
+        const productId = "AUDIT-TRAIL-001";
+
+        // Complete product lifecycle
+        chain.mineBlock([
+            Tx.contractCall("supply-contract", "register-product", 
+                [types.ascii(productId), types.ascii("Audit Trail Product"), 
+                 types.ascii("Raw Materials Facility")], deployer.address)
+        ]);
+
+        chain.mineBlock([
+            Tx.contractCall("supply-contract", "transfer-ownership", 
+                [types.ascii(productId), types.principal(processor.address), 
+                 types.ascii("Processing Facility"), 
+                 types.ascii("Transferred for processing and quality control")], 
+                deployer.address)
+        ]);
+
+        chain.mineBlock([
+            Tx.contractCall("supply-contract", "transfer-ownership", 
+                [types.ascii(productId), types.principal(distributor.address), 
+                 types.ascii("Distribution Center"), 
+                 types.ascii("Quality approved, ready for distribution")], 
+                processor.address)
+        ]);
+
+        chain.mineBlock([
+            Tx.contractCall("supply-contract", "transfer-ownership", 
+                [types.ascii(productId), types.principal(retailer.address), 
+                 types.ascii("Retail Store Floor"), 
+                 types.ascii("Final destination - ready for consumer purchase")], 
+                distributor.address)
+        ]);
+
+        // Audit the complete trail
+        let checkpointCount = chain.mineBlock([
+            Tx.contractCall("supply-contract", "get-checkpoint-count", 
+                [types.ascii(productId)], deployer.address)
+        ]);
+        assertEquals(checkpointCount.receipts[0].result, "{count: u4}");
+
+        // Verify each checkpoint in the trail
+        let checkpoint1 = chain.mineBlock([
+            Tx.contractCall("supply-contract", "get-checkpoint", 
+                [types.ascii(productId), types.uint(1)], deployer.address)
+        ]);
+        assertEquals(checkpoint1.receipts[0].result.includes("Product registered in supply chain"), true);
+
+        let checkpoint2 = chain.mineBlock([
+            Tx.contractCall("supply-contract", "get-checkpoint", 
+                [types.ascii(productId), types.uint(2)], deployer.address)
+        ]);
+        assertEquals(checkpoint2.receipts[0].result.includes("processing and quality control"), true);
+
+        let checkpoint3 = chain.mineBlock([
+            Tx.contractCall("supply-contract", "get-checkpoint", 
+                [types.ascii(productId), types.uint(3)], deployer.address)
+        ]);
+        assertEquals(checkpoint3.receipts[0].result.includes("Quality approved"), true);
+
+        let checkpoint4 = chain.mineBlock([
+            Tx.contractCall("supply-contract", "get-checkpoint", 
+                [types.ascii(productId), types.uint(4)], deployer.address)
+        ]);
+        assertEquals(checkpoint4.receipts[0].result.includes("consumer purchase"), true);
+
+        // Verify final product state
+        let finalState = chain.mineBlock([
+            Tx.contractCall("supply-contract", "get-product", 
+                [types.ascii(productId)], deployer.address)
+        ]);
+        const finalResult = finalState.receipts[0].result;
+        assertEquals(finalResult.includes(retailer.address), true);
+        assertEquals(finalResult.includes("Retail Store Floor"), true);
+        assertEquals(finalResult.includes('"transferred"'), true);
+    },
+});
